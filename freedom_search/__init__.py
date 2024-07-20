@@ -1,0 +1,1 @@
+from freedom_search.enhancer import InternetSearchEnhancer

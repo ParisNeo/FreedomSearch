@@ -1,0 +1,6 @@
+bs4
+requests==2.32.3
+setuptools==70.2.0
+ascii_colors==0.4.0
+pipmaster==0.1.5
+googlesearch-python
