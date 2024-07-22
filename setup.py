@@ -8,7 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="freedom_search",
-    version="0.1.5",
+    version="0.1.6",
     author="ParisNeo",
     author_email="parisneoai@gmail.com",
     description="Empower your AI models with ethical, open-source web intelligence",
