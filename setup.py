@@ -8,7 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="freedom_search",
-    version="0.1.6",
+    version="0.2.2",
     author="ParisNeo",
     author_email="parisneoai@gmail.com",
     description="Empower your AI models with ethical, open-source web intelligence",
@@ -23,10 +23,11 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
-    python_requires=">=3.7",
+    python_requires=">=3.8",
 )
