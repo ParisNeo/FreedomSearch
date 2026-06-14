@@ -18,6 +18,10 @@ except ImportError:
 
 class GoogleSearch(SearchEngine):
     def search(self, query, num_results=5):
+        if not GOOGLE_SEARCH_AVAILABLE:
+            # Library not importable; fail closed with an empty result set
+            # rather than raising NameError on the unbound `google_search` name.
+            return []
         results = []
         for j in google_search(query, num_results=num_results):
             results.append({

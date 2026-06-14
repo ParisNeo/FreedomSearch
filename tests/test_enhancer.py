@@ -21,9 +21,12 @@ class TestInternetSearchEnhancer(unittest.TestCase):
     @patch('freedom_search.enhancer.time.sleep')
     @patch('freedom_search.enhancer.time.time')
     def test_rate_limit(self, mock_time, mock_sleep):
-        mock_time.side_effect = [0, 0.5]  # First call returns 0, second call returns 0.5
+        # Simulate "now is 0.5s after the last request"; min interval is 1.0s,
+        # so the limiter must sleep for 0.5s. last_request_time starts at 0
+        # from __init__, and both time.time() calls return 0.5.
+        mock_time.return_value = 0.5
         self.enhancer._rate_limit()
-        mock_sleep.assert_called_once_with(0.5)  # Should sleep for 0.5 seconds
+        mock_sleep.assert_called_once_with(0.5)
 
     @patch.object(InternetSearchEnhancer, 'search')
     def test_enhance_llm_input_with_results(self, mock_search):

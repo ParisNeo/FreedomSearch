@@ -38,7 +38,7 @@ class InternetSearchEnhancer:
 
     def extract_info(self, url):
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
             main_content = soup.find('main') or soup.find('article') or soup.find('body')
             if main_content:

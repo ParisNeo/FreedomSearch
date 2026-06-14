@@ -47,7 +47,9 @@ class TestEnhancerIntegration(unittest.TestCase):
 
         self.assertIn("Original", result)
         self.assertIn("Additional context", result)
-        self.assertIn("Error extracting info", result)
+        # preprocess_text() lowercases the text, so the error string is
+        # normalized to "error extracting info: dns failure" in the output.
+        self.assertIn("error extracting info", result.lower())
 
     def test_cache_prevents_redundant_engine_calls(self):
         """Repeated identical searches must hit the lru_cache, not the engine."""
