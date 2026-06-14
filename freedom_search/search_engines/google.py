@@ -1,7 +1,10 @@
 from freedom_search.search_engines.base import SearchEngine
 from pipmaster import PackageManager
 from ascii_colors import ASCIIColors
+
 pm = PackageManager()
+GOOGLE_SEARCH_AVAILABLE = False
+
 # Check if the module can be imported
 if not pm.is_installed("googlesearch-python"):
     # Install the package using its pip install name
@@ -9,6 +12,7 @@ if not pm.is_installed("googlesearch-python"):
 
 try:
     from googlesearch import search as google_search
+    GOOGLE_SEARCH_AVAILABLE = True
 except ImportError:
     ASCIIColors.red("Google search not available. To enable, install googlesearch-python library.")
 
