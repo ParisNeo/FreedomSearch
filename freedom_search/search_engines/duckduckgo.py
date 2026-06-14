@@ -10,7 +10,7 @@ class DuckDuckGoSearch(SearchEngine):
     def search(self, query, num_results=5):
         encoded_query = quote_plus(query)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-        response = requests.get(f"{self.search_url}?q={encoded_query}", headers=headers)
+        response = requests.get(f"{self.search_url}?q={encoded_query}", headers=headers, timeout=10)
         
         soup = BeautifulSoup(response.text, 'html.parser')
         

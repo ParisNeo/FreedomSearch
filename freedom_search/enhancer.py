@@ -1,10 +1,8 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 import re
 import time
 from functools import lru_cache
-from abc import ABC, abstractmethod
 from freedom_search.search_engines.duckduckgo import DuckDuckGoSearch
 from freedom_search.search_engines.google import GoogleSearch
 
