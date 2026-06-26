@@ -26,14 +26,3 @@ print(enhanced_prompt)
 ```
 
 Contribute to FreedomSearch and help shape the future of ethical AI augmentation!
-```
-
-This description:
-
-1. Starts with a catchy tagline that encapsulates the library's purpose and ethical stance.
-2. Briefly explains what FreedomSearch does and its target use case.
-3. Lists key features using emojis for visual appeal and quick scanning.
-4. Includes a short pitch for potential users and contributors.
-5. Provides a quick start code snippet to show how easy it is to use.
-6. Ends with a call-to-action for contributions, emphasizing the open-source nature of the project.
-

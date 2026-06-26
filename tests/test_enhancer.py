@@ -61,9 +61,21 @@ class TestInternetSearchEnhancer(unittest.TestCase):
         self.assertEqual(result[0]['title'], 'Test')
 
     def test_extract_info(self):
-        with patch('freedom_search.enhancer.requests.get') as mock_get:
+        # Patch the Session's get method (where extract_info actually
+        # routes the HTTP call) rather than the module-level requests.get.
+        # Also mock socket.getaddrinfo so the SSRF guard sees a public IP
+        # (93.184.216.34 = example.com) without doing real DNS, and
+        # provide iter_content + encoding because extract_info now streams
+        # the body with a 5 MiB cap instead of buffering .text.
+        with patch.object(self.enhancer._http, 'get') as mock_get, \
+             patch('freedom_search.enhancer.socket.getaddrinfo',
+                   return_value=[(2, 1, 6, '', ('93.184.216.34', 0))]):
             mock_response = MagicMock()
-            mock_response.text = "<html><body><p>Test content</p></body></html>"
+            mock_response.encoding = 'utf-8'
+            mock_response.iter_content.return_value = [
+                b"<html><body><p>Test content</p></body></html>"
+            ]
+            mock_response.raise_for_status = MagicMock()
             mock_get.return_value = mock_response
             result = self.enhancer.extract_info("http://test.com")
             self.assertEqual(result, "Test content")

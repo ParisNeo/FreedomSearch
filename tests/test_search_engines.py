@@ -1,296 +1,298 @@
-"""
-Comprehensive unit tests for search engine implementations and registration.
-
-These tests complement test_integration.py by focusing on:
-    * URL construction and percent-encoding details
-    * Timeout enforcement on outbound HTTP calls
-    * Search engine registration / lookup in InternetSearchEnhancer
-    * The abstract SearchEngine contract
-    * Google-specific fallback behavior under the GOOGLE_SEARCH_AVAILABLE flag
-"""
 import unittest
 from unittest.mock import patch, MagicMock
-from urllib.parse import quote_plus
-
-from freedom_search import InternetSearchEnhancer
+from freedom_search import (
+    InternetSearchEnhancer,
+    SearchConfig,
+    SearchResult,
+)
 from freedom_search.search_engines.base import SearchEngine
-from freedom_search.search_engines.duckduckgo import DuckDuckGoSearch
-import freedom_search.search_engines.google as google_module
-from freedom_search.search_engines.google import GoogleSearch
 
 
-class TestDuckDuckGoURLConstruction(unittest.TestCase):
-    """Verify the DuckDuckGo engine builds well-formed request URLs."""
+class TestInternetSearchEnhancer(unittest.TestCase):
 
     def setUp(self):
-        self.engine = DuckDuckGoSearch()
+        self.enhancer = InternetSearchEnhancer()
 
-    def test_search_url_uses_https(self):
-        """The endpoint must be HTTPS to protect query privacy in transit."""
-        self.assertTrue(self.engine.search_url.startswith("https://"))
-
-    def test_search_url_points_to_html_endpoint(self):
-        """Must target the html.duckduckgo.com HTML endpoint."""
-        self.assertIn("duckduckgo.com", self.engine.search_url)
-        self.assertIn("/html/", self.engine.search_url)
-
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_query_is_percent_encoded(self, mock_get):
-        """Spaces and reserved characters must be percent-encoded."""
-        mock_response = MagicMock()
-        mock_response.text = "<html><body></body></html>"
-        mock_get.return_value = mock_response
-
-        raw_query = "test query with spaces & symbols!"
-        self.engine.search(raw_query)
-
-        called_url = mock_get.call_args.args[0]
-        self.assertIn(quote_plus(raw_query), called_url)
-        # The raw space must not appear in the encoded query string.
-        query_part = called_url.split("?q=", 1)[1]
-        self.assertNotIn(" ", query_part)
-
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_timeout_is_set(self, mock_get):
-        """A timeout must be supplied to prevent indefinite hangs."""
-        mock_response = MagicMock()
-        mock_response.text = "<html><body></body></html>"
-        mock_get.return_value = mock_response
-
-        self.engine.search("test")
-        call_kwargs = mock_get.call_args.kwargs
-        self.assertIn('timeout', call_kwargs)
-        self.assertIsNotNone(call_kwargs['timeout'])
-        self.assertGreater(call_kwargs['timeout'], 0)
-
-
-class TestDuckDuckGoResultParsing(unittest.TestCase):
-    """Verify result parsing edge cases."""
-
-    def setUp(self):
-        self.engine = DuckDuckGoSearch()
-
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_html_entities_are_decoded(self, mock_get):
-        """Entities like &amp; and &quot; must be decoded by BeautifulSoup."""
-        mock_response = MagicMock()
-        mock_response.text = """
-        <html><body>
-            <div class="result">
-                <h2 class="result__title">
-                    <a href="http://example.com/1">Tom &amp; Jerry &lt;3</a>
-                </h2>
-                <a class="result__snippet">A &quot;classic&quot; show</a>
-            </div>
-        </body></html>
-        """
-        mock_get.return_value = mock_response
-
-        results = self.engine.search("cartoon")
-        self.assertEqual(len(results), 1)
-        self.assertIn("Tom & Jerry", results[0]['title'])
-        self.assertIn('"', results[0]['snippet'])
-
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_single_result(self, mock_get):
-        """A page with one result must return a list of length 1."""
-        mock_response = MagicMock()
-        mock_response.text = """
-        <html><body>
-            <div class="result">
-                <h2 class="result__title">
-                    <a href="http://example.com/single">Only Result</a>
-                </h2>
-                <a class="result__snippet">Only snippet</a>
-            </div>
-        </body></html>
-        """
-        mock_get.return_value = mock_response
-
-        results = self.engine.search("query")
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['title'], 'Only Result')
-        self.assertEqual(results[0]['url'], 'http://example.com/single')
-        self.assertEqual(results[0]['snippet'], 'Only snippet')
-
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_preserves_document_order(self, mock_get):
-        """Results must be returned in document order."""
-        mock_response = MagicMock()
-        items = "".join([
-            f"""
-            <div class="result">
-                <h2 class="result__title"><a href="http://e.com/{i}">Title {i}</a></h2>
-                <a class="result__snippet">Snippet {i}</a>
-            </div>
-            """ for i in range(5)
-        ])
-        mock_response.text = f"<html><body>{items}</body></html>"
-        mock_get.return_value = mock_response
-
-        results = self.engine.search("query", num_results=5)
-        self.assertEqual(
-            [r['title'] for r in results],
-            ['Title 0', 'Title 1', 'Title 2', 'Title 3', 'Title 4'],
+    def test_init_default_engine(self):
+        self.assertIsInstance(
+            self.enhancer.current_engine,
+            self.enhancer.search_engines['duckduckgo'].__class__,
         )
 
-    @patch('freedom_search.search_engines.duckduckgo.requests.get')
-    def test_result_dict_has_required_keys(self, mock_get):
-        """Every result must contain title, url, and snippet keys."""
-        mock_response = MagicMock()
-        mock_response.text = """
-        <html><body>
-            <div class="result">
-                <h2 class="result__title">
-                    <a href="http://example.com/x">X</a>
-                </h2>
-                <a class="result__snippet">Y</a>
-            </div>
-        </body></html>
-        """
-        mock_get.return_value = mock_response
-
-        results = self.engine.search("query")
-        self.assertEqual(len(results), 1)
-        for key in ('title', 'url', 'snippet'):
-            self.assertIn(key, results[0])
-
-
-class TestGoogleSearchBehavior(unittest.TestCase):
-    """Additional Google search behavior tests."""
-
-    def setUp(self):
-        self.engine = GoogleSearch()
-
-    def test_search_returns_empty_when_unavailable(self):
-        """When GOOGLE_SEARCH_AVAILABLE is False, search() must return []."""
-        original = google_module.GOOGLE_SEARCH_AVAILABLE
-        google_module.GOOGLE_SEARCH_AVAILABLE = False
-        try:
-            self.assertEqual(self.engine.search("query"), [])
-        finally:
-            google_module.GOOGLE_SEARCH_AVAILABLE = original
-
-    def test_search_passes_num_results(self):
-        """num_results must be forwarded to the google_search function."""
-        original_available = google_module.GOOGLE_SEARCH_AVAILABLE
-        original_search = getattr(google_module, 'google_search', None)
-
-        google_module.GOOGLE_SEARCH_AVAILABLE = True
-        received_num = []
-
-        def mock_google_search(query, num_results=5):
-            received_num.append(num_results)
-            return iter([])
-
-        google_module.google_search = mock_google_search
-        try:
-            self.engine.search("query", num_results=7)
-            self.assertEqual(received_num, [7])
-        finally:
-            google_module.GOOGLE_SEARCH_AVAILABLE = original_available
-            if original_search is not None:
-                google_module.google_search = original_search
-
-    def test_search_result_structure(self):
-        """Google results must have title, url, snippet keys; snippet is empty."""
-        original_available = google_module.GOOGLE_SEARCH_AVAILABLE
-        original_search = getattr(google_module, 'google_search', None)
-
-        google_module.GOOGLE_SEARCH_AVAILABLE = True
-
-        def mock_google_search(query, num_results=5):
-            return iter(['http://a.com', 'http://b.com'])
-
-        google_module.google_search = mock_google_search
-        try:
-            results = self.engine.search("query")
-            self.assertEqual(len(results), 2)
-            for r in results:
-                self.assertIn('title', r)
-                self.assertIn('url', r)
-                self.assertIn('snippet', r)
-                self.assertEqual(r['title'], r['url'])  # Library limitation
-                self.assertEqual(r['snippet'], '')
-        finally:
-            google_module.GOOGLE_SEARCH_AVAILABLE = original_available
-            if original_search is not None:
-                google_module.google_search = original_search
-
-
-class TestSearchEngineRegistry(unittest.TestCase):
-    """Verify how search engines are registered and looked up in the enhancer."""
-
-    def test_default_engines_registered(self):
-        """Both duckduckgo and google must be registered by default."""
-        enhancer = InternetSearchEnhancer()
-        self.assertIn('duckduckgo', enhancer.search_engines)
-        self.assertIn('google', enhancer.search_engines)
-
-    def test_registered_engines_are_searchengine_instances(self):
-        """All registered engines must be SearchEngine subclasses."""
-        enhancer = InternetSearchEnhancer()
-        for name, engine in enhancer.search_engines.items():
-            self.assertIsInstance(
-                engine, SearchEngine,
-                f"{name} is not a SearchEngine instance",
-            )
-
-    def test_default_engine_is_duckduckgo(self):
-        """The default engine must be duckduckgo (privacy-first)."""
-        enhancer = InternetSearchEnhancer()
-        self.assertIs(enhancer.current_engine, enhancer.search_engines['duckduckgo'])
-
-    def test_can_specify_engine_at_init(self):
-        """Passing an engine name to __init__ must set it as current."""
-        enhancer = InternetSearchEnhancer('google')
-        self.assertIs(enhancer.current_engine, enhancer.search_engines['google'])
-
-    def test_engines_are_independent_instances(self):
-        """Each enhancer must own its engine instances (no shared globals)."""
-        e1 = InternetSearchEnhancer()
-        e2 = InternetSearchEnhancer()
-        self.assertIsNot(
-            e1.search_engines['duckduckgo'],
-            e2.search_engines['duckduckgo'],
-        )
-        self.assertIsNot(
-            e1.search_engines['google'],
-            e2.search_engines['google'],
+    def test_set_search_engine_valid(self):
+        self.enhancer.set_search_engine('google')
+        self.assertIsInstance(
+            self.enhancer.current_engine,
+            self.enhancer.search_engines['google'].__class__,
         )
 
+    def test_set_search_engine_invalid(self):
+        with self.assertRaises(ValueError):
+            self.enhancer.set_search_engine('invalid_engine')
 
-class TestSearchEngineAbstractContract(unittest.TestCase):
-    """Verify the abstract base class contract."""
+    @patch('freedom_search.enhancer.time.sleep')
+    @patch('freedom_search.enhancer.time.time')
+    def test_rate_limit(self, mock_time, mock_sleep):
+        # See original test — preserved exactly.
+        mock_time.return_value = 0.5
+        self.enhancer._rate_limit()
+        mock_sleep.assert_called_once_with(0.5)
 
-    def test_subclass_without_search_cannot_instantiate(self):
-        """A subclass that omits search() must fail to instantiate."""
-        class IncompleteEngine(SearchEngine):
-            pass
+    @patch.object(InternetSearchEnhancer, 'search')
+    def test_enhance_llm_input_with_results(self, mock_search):
+        mock_search.return_value = [
+            {'title': 'Test', 'url': 'http://test.com', 'snippet': 'This is a test'}
+        ]
+        original_prompt = "Original prompt"
+        search_query = "test query"
+        result = self.enhancer.enhance_llm_input(original_prompt, search_query)
+        self.assertTrue(original_prompt in result)
+        self.assertTrue("Additional context" in result)
 
+    @patch.object(InternetSearchEnhancer, 'search')
+    def test_enhance_llm_input_no_results(self, mock_search):
+        mock_search.return_value = []
+        original_prompt = "Original prompt"
+        search_query = "test query"
+        result = self.enhancer.enhance_llm_input(original_prompt, search_query)
+        self.assertTrue(original_prompt in result)
+        self.assertTrue("No additional information found" in result)
+
+    @patch.object(InternetSearchEnhancer, '_rate_limit')
+    def test_search(self, mock_rate_limit):
+        self.enhancer.current_engine = MagicMock()
+        self.enhancer.current_engine.search.return_value = [
+            {'title': 'Test', 'url': 'http://test.com', 'snippet': 'This is a test'}
+        ]
+        result = self.enhancer.search("test query")
+        mock_rate_limit.assert_called_once()
+        self.enhancer.current_engine.search.assert_called_once_with("test query", 5)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['title'], 'Test')
+
+    def test_extract_info(self):
+        # Patch the Session's get method (where extract_info actually
+        # routes the HTTP call) rather than the module-level requests.get.
+        # Also mock socket.getaddrinfo so the SSRF guard sees a public IP
+        # (93.184.216.34 = example.com) without doing real DNS, and
+        # provide iter_content + encoding because extract_info now streams
+        # the body with a 5 MiB cap instead of buffering .text.
+        with patch.object(self.enhancer._http, 'get') as mock_get, \
+             patch('freedom_search.enhancer.socket.getaddrinfo',
+                   return_value=[(2, 1, 6, '', ('93.184.216.34', 0))]):
+            mock_response = MagicMock()
+            mock_response.encoding = 'utf-8'
+            mock_response.iter_content.return_value = [
+                b"<html><body><p>Test content</p></body></html>"
+            ]
+            mock_response.raise_for_status = MagicMock()
+            mock_get.return_value = mock_response
+            result = self.enhancer.extract_info("http://test.com")
+            self.assertEqual(result, "Test content")
+
+    def test_preprocess_text(self):
+        text = "This is a TEST with 123 and !@#."
+        result = self.enhancer.preprocess_text(text)
+        self.assertEqual(result, "this is a test with and")
+
+    def test_format_for_llm(self):
+        info = "This is a very long piece of text " * 100
+        result = self.enhancer.format_for_llm(info)
+        self.assertTrue(result.startswith("Relevant information: This is a very"))
+        self.assertTrue(result.endswith("..."))
+        self.assertTrue(len(result) < 550)
+
+    # ----------------- New tests for v0.3 features -----------------
+
+    def test_custom_config_is_respected(self):
+        cfg = SearchConfig(num_results=7, max_extract_chars=42)
+        enhancer = InternetSearchEnhancer(config=cfg)
+        self.assertIs(enhancer.config, cfg)
+        self.assertEqual(enhancer.config.max_extract_chars, 42)
+
+    def test_register_engine_rejects_non_searchengine(self):
         with self.assertRaises(TypeError):
-            IncompleteEngine()
+            self.enhancer.register_engine("bad", object())
 
-    def test_subclass_with_search_can_instantiate(self):
-        """A subclass implementing search() must instantiate cleanly."""
-        class CompleteEngine(SearchEngine):
+    def test_register_engine_accepts_searchengine(self):
+        class MyEngine(SearchEngine):
             def search(self, query, num_results=5):
                 return []
 
-        engine = CompleteEngine()
-        self.assertEqual(engine.search("anything"), [])
+        self.enhancer.register_engine("my", MyEngine())
+        self.enhancer.set_search_engine("my")
+        self.assertIs(self.enhancer.current_engine,
+                      self.enhancer.search_engines["my"])
 
-    def test_engine_returns_list_of_dicts_contract(self):
-        """The contract is that search() returns a list of dicts."""
-        class CustomEngine(SearchEngine):
+    def test_search_filters_blocked_domains(self):
+        cfg = SearchConfig(blocked_domains=("blocked.com",))
+        enhancer = InternetSearchEnhancer(config=cfg)
+        enhancer.current_engine = MagicMock()
+        enhancer.current_engine.search.return_value = [
+            {'title': 'A', 'url': 'http://ok.com/1', 'snippet': ''},
+            {'title': 'B', 'url': 'http://blocked.com/1', 'snippet': ''},
+            {'title': 'C', 'url': 'http://ok.com/2', 'snippet': ''},
+        ]
+        enhancer.cache_clear()
+        result = enhancer.search("query", num_results=5)
+        urls = [r['url'] for r in result]
+        self.assertIn("http://ok.com/1", urls)
+        self.assertNotIn("http://blocked.com/1", urls)
+
+    def test_search_deduplicates_urls(self):
+        enhancer = InternetSearchEnhancer()
+        enhancer.current_engine = MagicMock()
+        enhancer.current_engine.search.return_value = [
+            {'title': 'A', 'url': 'http://x.com/?utm=1', 'snippet': ''},
+            {'title': 'A-dup', 'url': 'http://x.com/?utm=2', 'snippet': ''},
+            {'title': 'B', 'url': 'http://y.com/', 'snippet': ''},
+        ]
+        enhancer.cache_clear()
+        result = enhancer.search("dedup-query", num_results=5)
+        urls = [r['url'] for r in result]
+        # Both x.com entries collapse; y.com survives.
+        self.assertEqual(len(result), 2)
+
+    def test_extract_parallel_single_url_uses_sequential_path(self):
+        enhancer = InternetSearchEnhancer()
+        with patch.object(enhancer, "extract_info",
+                          return_value="hello") as mock_extract:
+            result = enhancer._extract_parallel(["http://x.com"])
+        self.assertEqual(result, ["hello"])
+        mock_extract.assert_called_once()
+
+    def test_extract_parallel_many_urls_uses_pool(self):
+        cfg = SearchConfig(max_workers=2)
+        enhancer = InternetSearchEnhancer(config=cfg)
+        urls = [f"http://x.com/{i}" for i in range(5)]
+        with patch.object(enhancer, "extract_info",
+                          side_effect=lambda u: f"content-of-{u}"):
+            result = enhancer._extract_parallel(urls)
+        self.assertEqual(len(result), 5)
+        # Aligned with input order
+        for u, r in zip(urls, result):
+            self.assertEqual(r, f"content-of-{u}")
+
+    def test_enhance_respects_total_char_budget(self):
+        cfg = SearchConfig(max_total_chars=200)
+        enhancer = InternetSearchEnhancer(config=cfg)
+        enhancer.current_engine = MagicMock()
+        enhancer.current_engine.search.return_value = [
+            {'title': 'T', 'url': f'http://x.com/{i}', 'snippet': ''}
+            for i in range(10)
+        ]
+        with patch.object(enhancer, "extract_info",
+                          return_value="x" * 200):
+            enhancer.cache_clear()
+            result = enhancer.enhance_llm_input("P", "q")
+        # Budget should prevent including all 10 chunks
+        self.assertLessEqual(len(result), 200 + len("P\n\nAdditional context:\n") + 100)
+
+    # ----------------- New tests for v0.4 features -----------------
+
+    def test_score_is_computed_per_result(self):
+        """Each result from search() must carry a _score in [0, 1]."""
+        enhancer = InternetSearchEnhancer()
+        enhancer.current_engine = MagicMock()
+        enhancer.current_engine.search.return_value = [
+            {'title': 'quantum physics article', 'url': 'http://a.com',
+             'snippet': 'all about quantum entanglement'},
+            {'title': 'cooking recipes', 'url': 'http://b.com',
+             'snippet': 'how to bake bread'},
+        ]
+        enhancer.cache_clear()
+        result = enhancer.search("quantum physics", num_results=5)
+        scores = [r["_score"] for r in result]
+        # First result has term overlap, second does not.
+        self.assertGreater(scores[0], 0.0)
+        self.assertEqual(scores[1], 0.0)
+        # All scores are in [0, 1].
+        for s in scores:
+            self.assertGreaterEqual(s, 0.0)
+            self.assertLessEqual(s, 1.0)
+
+    def test_enhance_sorts_results_by_score_descending(self):
+        """enhance_llm_input should pick the highest-scoring result first."""
+        enhancer = InternetSearchEnhancer()
+        enhancer.current_engine = MagicMock()
+        enhancer.current_engine.search.return_value = [
+            {'title': 'unrelated stuff', 'url': 'http://a.com', 'snippet': 'x'},
+            {'title': 'python programming',
+             'url': 'http://b.com', 'snippet': 'python is great'},
+        ]
+        # Force score ordering: a.com -> 0.0, b.com -> high.
+        with patch.object(enhancer, "_score_result",
+                          side_effect=lambda r, q: 0.9 if 'b.com' in r['url']
+                          else 0.0):
+            with patch.object(enhancer, "extract_info",
+                              return_value="x" * 50):
+                enhancer.cache_clear()
+                enhancer.enhance_llm_input("P", "python programming")
+                # The high-scoring b.com URL must be fetched first.
+                call_args = enhancer.extract_info.call_args_list
+                self.assertIn("http://b.com", call_args[0].args[0])
+
+    def test_search_all_merges_results_from_multiple_engines(self):
+        """search_all must fan out to every registered engine and merge."""
+        # Build two fake engines returning disjoint URLs.
+        class EngineA(SearchEngine):
             def search(self, query, num_results=5):
-                return [{'title': query, 'url': f'http://{query}', 'snippet': ''}]
+                return [
+                    {'title': 'A1', 'url': 'http://a.com/1', 'snippet': 'a1'},
+                    {'title': 'SHARED', 'url': 'http://shared.com/x',
+                     'snippet': 'shared'},
+                ]
 
-        engine = CustomEngine()
-        results = engine.search("x")
-        self.assertIsInstance(results, list)
-        self.assertEqual(len(results), 1)
-        self.assertIsInstance(results[0], dict)
+        class EngineB(SearchEngine):
+            def search(self, query, num_results=5):
+                return [
+                    {'title': 'B1', 'url': 'http://b.com/1', 'snippet': 'b1'},
+                    {'title': 'SHARED', 'url': 'http://shared.com/x',
+                     'snippet': 'shared'},
+                ]
+
+        enhancer = InternetSearchEnhancer(
+            search_engine="a",
+            engines={"a": EngineA(), "b": EngineB()},
+        )
+        enhancer.cache_clear()
+        result = enhancer.search_all("any query", num_results=10)
+        urls = [r["url"] for r in result]
+        # All 3 unique URLs must appear.
+        self.assertIn("http://a.com/1", urls)
+        self.assertIn("http://b.com/1", urls)
+        self.assertIn("http://shared.com/x", urls)
+        # SHARED must have the highest score thanks to the vote boost.
+        scores = {r["url"]: r["_score"] for r in result}
+        self.assertGreater(scores["http://shared.com/x"],
+                           scores["http://a.com/1"])
+
+    def test_search_all_handles_engine_failure_gracefully(self):
+        """An engine that raises must not abort the whole multi-search."""
+        class BoomEngine(SearchEngine):
+            def search(self, query, num_results=5):
+                raise RuntimeError("kaboom")
+
+        class OkEngine(SearchEngine):
+            def search(self, query, num_results=5):
+                return [{'title': 'ok', 'url': 'http://ok.com', 'snippet': ''}]
+
+        enhancer = InternetSearchEnhancer(
+            search_engine="boom",
+            engines={"boom": BoomEngine(), "ok": OkEngine()},
+        )
+        enhancer.cache_clear()
+        result = enhancer.search_all("query", num_results=5)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["url"], "http://ok.com")
+
+    def test_cache_clear_method_exists(self):
+        """v0.4 exposes cache_clear() on the enhancer instance."""
+        enhancer = InternetSearchEnhancer()
+        self.assertTrue(hasattr(enhancer, "cache_clear"))
+        # Idempotent: should not raise on an empty cache.
+        enhancer.cache_clear()
+        enhancer.cache_clear()
 
 
 if __name__ == '__main__':

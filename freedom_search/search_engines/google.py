@@ -1,67 +1,82 @@
+"""Google search engine.
+
+Uses the ``googlesearch-python`` package, which only exposes the URL of each
+hit (no title or snippet metadata). When the package is unavailable, the
+engine degrades to a no-op that returns an empty list, so the rest of the
+library continues to function with the remaining engines.
+"""
 from freedom_search.search_engines.base import SearchEngine
+import logging
 
-# ---------------------------------------------------------------------------
-# Optional dependencies
-# ---------------------------------------------------------------------------
-# `pipmaster` is used to auto-install `googlesearch-python` on first use, and
-# `ascii_colors` is used to print a colored warning if the import fails.
+logger = logging.getLogger(__name__)
+
+# Module-level availability flag + swappable function reference.
+# The test suite relies on these names, so they must remain stable.
 #
-# Both are treated as OPTIONAL: if either is missing (or fails to construct,
-# e.g. in a read-only / PEP 668 / sandboxed environment), the rest of the
-# freedom_search library MUST remain importable. Without this guard, a missing
-# optional dep would cascade an ImportError all the way up to:
-#     from freedom_search import InternetSearchEnhancer
-# ...even for users who only ever use DuckDuckGoSearch.
-# ---------------------------------------------------------------------------
-try:
-    from pipmaster import PackageManager
-    from ascii_colors import ASCIIColors
-    _pm = PackageManager()
-except ImportError:
-    PackageManager = None
-    ASCIIColors = None
-    _pm = None
-
+# Security note: we intentionally do NOT auto-install googlesearch-python
+# at import time. Runtime pip-installs (a) bypass requirements.txt pinning,
+# (b) re-introduce the well-known supply-chain risk against this package,
+# and (c) mask malicious payloads behind a broad except. Dependencies must
+# be declared and audited in requirements.txt.
 GOOGLE_SEARCH_AVAILABLE = False
 google_search = None
 
-# ---------------------------------------------------------------------------
-# Best-effort: ensure `googlesearch-python` is installed, then import it.
-# Any failure here is swallowed: the worst case is that
-# GOOGLE_SEARCH_AVAILABLE stays False and GoogleSearch.search() returns [].
-# ---------------------------------------------------------------------------
-if _pm is not None:
-    try:
-        if not _pm.is_installed("googlesearch-python"):
-            _pm.install("googlesearch-python")
-    except Exception:
-        # Sandboxed envs, read-only filesystems, PEP 668, network failures...
-        # We silently degrade rather than blowing up the import chain.
-        pass
-
 try:
-    from googlesearch import search as _google_search
-    google_search = _google_search
+    from googlesearch import search as google_search  # noqa: F811
     GOOGLE_SEARCH_AVAILABLE = True
-except ImportError:
-    if ASCIIColors is not None:
-        ASCIIColors.red(
-            "Google search not available. "
-            "To enable, install googlesearch-python library."
-        )
+    logger.debug("googlesearch-python loaded successfully")
+except ImportError as exc:
+    GOOGLE_SEARCH_AVAILABLE = False
+    google_search = None
+    logger.info(
+        "Google search backend unavailable (%s). "
+        "Install 'googlesearch-python' to enable it. "
+        "Falling back to other engines.",
+        exc,
+    )
 
 
 class GoogleSearch(SearchEngine):
+    """Google search via ``googlesearch-python``.
+
+    Note:
+        The underlying library only returns URLs. ``title`` falls back to
+        the URL and ``snippet`` is always empty.
+    """
+
     def search(self, query, num_results=5):
+        """Perform a Google search and return the results as a list of dicts.
+
+        Args:
+            query (str): The search query string to send to Google.
+            num_results (int, optional): Maximum number of results to retrieve.
+                Defaults to 5.
+
+        Returns:
+            list[dict]: A list of result dictionaries with ``title``, ``url``,
+            and ``snippet`` keys. When the underlying library is unavailable,
+            returns an empty list rather than raising.
+        """
         if not GOOGLE_SEARCH_AVAILABLE or google_search is None:
-            # Library not importable; fail closed with an empty result set
-            # rather than raising NameError on the unbound `google_search` name.
+            logger.debug(
+                "Skipping Google search for query=%r: backend unavailable.",
+                query,
+            )
             return []
+
+        try:
+            raw_results = list(google_search(query, num_results=num_results))
+        except Exception as exc:  # noqa: BLE001
+            # googlesearch-python is fragile (rate limits, captchas, blocks).
+            # Treat any failure as a soft error so other engines can take over.
+            logger.warning("Google search failed for query=%r: %s", query, exc)
+            return []
+
         results = []
-        for j in google_search(query, num_results=num_results):
+        for url in raw_results:
             results.append({
-                'title': j,
-                'url': j,
-                'snippet': ''  # Google search library doesn't provide snippets
+                'title': url,
+                'url': url,
+                'snippet': '',  # Library limitation: no snippets exposed.
             })
         return results
