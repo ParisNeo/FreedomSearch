@@ -9,7 +9,7 @@ import hashlib
 import ipaddress
 import re
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 # Pre-compiled for hot-path speed
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -114,6 +114,12 @@ def is_internal_ip(ip_str: str) -> bool:
     """Return True if an IP address is private, loopback, link-local,
     multicast, reserved, or unspecified.
 
+    Also flags IPv4-mapped IPv6 addresses (e.g. ``::ffff:127.0.0.1``) by
+    re-checking the embedded IPv4 representation. The IPv6 properties
+    (``is_private``/``is_loopback``/...) do not see the IPv4 suffix, so
+    a naive check would let ``http://[::ffff:127.0.0.1]/`` reach a
+    loopback target.
+
     Unparseable strings are treated as internal (deny by default) so a
     malformed IP cannot accidentally pass an SSRF guard. When in doubt,
     refuse.
@@ -122,14 +128,21 @@ def is_internal_ip(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except (ValueError, TypeError):
         return True
-    return (
+    if (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
-    )
+    ):
+        return True
+    # IPv4-mapped IPv6 (::ffff:0:0/96): v6 properties miss the embedded
+    # v4. Re-validate the v4 form. ``ipv4_mapped`` is None when the
+    # address is not in the mapped range, so the branch is safe.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return is_internal_ip(str(ip.ipv4_mapped))
+    return False
 
 
 def is_safe_url(url: str) -> bool:
@@ -159,7 +172,42 @@ def is_safe_url(url: str) -> bool:
         return False
     if parsed.username or parsed.password:
         return False
-    return bool(parsed.hostname)
+    hostname = parsed.hostname
+    if not hostname or " " in hostname:
+        # ``urlparse`` is lenient: it accepts malformed hostnames like
+        # ``"exa mple.com"`` (with a space) and returns them verbatim.
+        # ``requests`` would reject these at connect time, but the
+        # SSRF guard should catch them pre-flight — otherwise an
+        # attacker can probe hostname-parsing bugs in our stack.
+        return False
+    return True
+
+
+def safe_url_for_log(url: str) -> str:
+    """Return a URL safe to include in logs: credentials stripped.
+
+    Preserves scheme, host, port, path, and query string so log entries
+    retain debugging context, but removes userinfo to prevent password
+    leaks (e.g. ``http://user:hunter2@example.com/`` becomes
+    ``http://example.com/``).
+
+    This is log-hygiene only — :func:`is_safe_url` still rejects
+    credentialed URLs at the validation boundary. We sanitize here so
+    that any WARNING log that includes the URL never carries the
+    password.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        # Unparseable URLs are redacted to a placeholder rather than
+        # logged verbatim, so the raw input cannot reach log files.
+        return "<unparseable-url>"
+    netloc = parsed.hostname or ""
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 def sanitize_text(text: str) -> str:

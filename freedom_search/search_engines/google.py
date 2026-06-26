@@ -6,6 +6,7 @@ engine degrades to a no-op that returns an empty list, so the rest of the
 library continues to function with the remaining engines.
 """
 from freedom_search.search_engines.base import SearchEngine
+from freedom_search.utils import is_safe_url
 import logging
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,13 @@ class GoogleSearch(SearchEngine):
 
         results = []
         for url in raw_results:
+            # Defense in depth: drop any URL that fails the safety
+            # pre-check. The enhancer's SSRF guard would also reject
+            # these, but filtering here keeps the LLM context clean and
+            # avoids wasted fetches when the engine is used standalone
+            # (e.g. directly by a unit test, agent, or alternate caller).
+            if not isinstance(url, str) or not is_safe_url(url):
+                continue
             results.append({
                 'title': url,
                 'url': url,
