@@ -18,6 +18,7 @@ from freedom_search.utils import (
     is_internal_ip,
     is_safe_url,
     normalize_url,
+    safe_url_for_log,
     sanitize_text,
 )
 
@@ -38,7 +39,8 @@ __all__ = [
     "hash_query",
     "is_internal_ip",
     "is_safe_url",
+    "safe_url_for_log",
     "sanitize_text",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
